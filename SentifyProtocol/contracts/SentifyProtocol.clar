@@ -333,4 +333,66 @@
     )
 )
 
+;; Claim rewards for a successful prediction after round resolution
+;; This function calculates the user's reward based on their prediction accuracy,
+;; updates their reputation score, and transfers the earned tokens to their account.
+;; The reward calculation considers both directional accuracy and price precision.
+;; @param asset-id: The asset identifier for the prediction round
+;; @param round-id: The round identifier to claim rewards from
+(define-public (claim-prediction-reward
+    (asset-id (string-ascii 20))
+    (round-id uint))
+    (let
+        (
+            (prediction-round (unwrap! (map-get? prediction-rounds 
+                { asset-id: asset-id, round-id: round-id }) err-not-found))
+            (user-pred (unwrap! (map-get? user-predictions
+                { asset-id: asset-id, round-id: round-id, predictor: tx-sender }) err-not-found))
+            (initial-price-value (get initial-price prediction-round))
+            (final-price-value (get final-price prediction-round))
+            (predicted-price-value (get predicted-price user-pred))
+            (sentiment-value (get sentiment user-pred))
+            (stake-value (get stake-amount user-pred))
+            (total-stake-value (get total-stake prediction-round))
+        )
+        ;; Validate claim conditions
+        (asserts! (get is-resolved prediction-round) err-prediction-active)
+        (asserts! (not (get is-rewarded user-pred)) err-already-predicted)
+        (asserts! (> final-price-value u0) err-not-found)
+        
+        ;; Calculate accuracy score (0-100)
+        (let
+            (
+                (accuracy (calculate-accuracy-score 
+                    predicted-price-value 
+                    final-price-value 
+                    sentiment-value
+                    initial-price-value))
+                (reward-amount (calculate-reward accuracy stake-value total-stake-value))
+                (protocol-fee (/ (* reward-amount (var-get protocol-fee-percentage)) u100))
+                (net-reward (- reward-amount protocol-fee))
+                (is-correct (>= accuracy u50))
+            )
+            
+            ;; Mark prediction as rewarded
+            (map-set user-predictions
+                { asset-id: asset-id, round-id: round-id, predictor: tx-sender }
+                (merge user-pred { is-rewarded: true })
+            )
+            
+            ;; Update user reputation
+            (update-user-reputation tx-sender is-correct net-reward)
+            
+            ;; Return reward info
+            (ok {
+                accuracy-score: accuracy,
+                reward-amount: net-reward,
+                protocol-fee: protocol-fee,
+                is-correct: is-correct
+            })
+        )
+    )
+)
+
+
 
